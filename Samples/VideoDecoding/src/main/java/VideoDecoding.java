@@ -13,16 +13,23 @@ import com.dynamsoft.license.LicenseError;
 import com.dynamsoft.license.LicenseException;
 import com.dynamsoft.license.LicenseManager;
 import com.dynamsoft.utility.MultiFrameResultCrossFilter;
+
+import org.bytedeco.ffmpeg.global.avutil;
+import org.bytedeco.javacv.FFmpegFrameGrabber;
+import org.bytedeco.javacv.Frame;
+import org.bytedeco.javacv.OpenCVFrameConverter;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.bytedeco.opencv.opencv_videoio.VideoCapture;
 
+import java.awt.GraphicsEnvironment;
+import java.nio.Buffer;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Scanner;
 
+import org.bytedeco.javacv.CanvasFrame;
 import static org.bytedeco.opencv.global.opencv_highgui.*;
-import static org.bytedeco.opencv.global.opencv_videoio.CAP_PROP_FRAME_HEIGHT;
-import static org.bytedeco.opencv.global.opencv_videoio.CAP_PROP_FRAME_WIDTH;
 
 class MyCapturedResultReceiver extends CapturedResultReceiver {
 
@@ -86,43 +93,116 @@ public class VideoDecoding {
             return;
         }
 
-        try (VideoCapture vc = !useVideoFile ? new VideoCapture(0) : new VideoCapture(videoFilePath)) {
-            int videoWidth = (int) vc.get(CAP_PROP_FRAME_WIDTH);
-            int videoHeight = (int) vc.get(CAP_PROP_FRAME_HEIGHT);
-            vc.set(CAP_PROP_FRAME_WIDTH, videoWidth);
-            vc.set(CAP_PROP_FRAME_HEIGHT, videoHeight);
-
-            if (!vc.isOpened()) {
-                cvRouter.stopCapturing();
-                return;
+        CanvasFrame canvas = null;
+        VideoCapture vc = null;
+        FFmpegFrameGrabber grabber = null;
+        OpenCVFrameConverter.ToMat converter = null;
+        String windowName = "Video Barcode Reader";
+        try {
+            if (useVideoFile) {
+                avutil.av_log_set_level(avutil.AV_LOG_QUIET);
+                grabber = new FFmpegFrameGrabber(videoFilePath);
+                try {
+                    grabber.start();
+                } catch (Exception e) {
+                    System.out.println("Error: " + e.getMessage());
+                    return;
+                }
+            } else {
+                vc = new VideoCapture(0);
+                if (!vc.isOpened()) {
+                    System.out.println("Error: Cannot open camera.");
+                    return;
+                }
             }
 
-            String windowName = "Video Barcode Reader";
+            boolean isHeadless = GraphicsEnvironment.isHeadless();
+            if (!isHeadless) {
+                canvas = new CanvasFrame(windowName, 1);
+                canvas.setDefaultCloseOperation(javax.swing.JFrame.EXIT_ON_CLOSE);
+                canvas.setAlwaysOnTop(true);
+                canvas.setVisible(true);
+                canvas.setAlwaysOnTop(false);
+            }
 
             int imageId = 0;
-            Mat frame = new Mat();
-            while (true) {
+            Frame frame;
+            converter = new OpenCVFrameConverter.ToMat();
+            while (canvas == null || canvas.isVisible()) {
                 imageId++;
-                boolean rval = vc.read(frame);
-                if (!rval) {
+                if (grabber != null) {
+                    frame = grabber.grab();
+                } else if (vc != null) {
+                    Mat mat = new Mat();
+                    if (!vc.read(mat)) {
+                        break;
+                    }
+
+                    if (mat.empty()) {
+                        System.out.println("Error: Frame is empty.");
+                        break;
+                    }
+
+                    frame = converter.convert(mat);
+                } else {
+                    System.out.println("Error: No video source available.");
+                    break;
+                }
+
+                if (frame == null) {
+                    break;
+                } else if (frame.image == null) {
+                    continue;
+                }
+
+                byte[] byteArray;
+                Buffer buffer = frame.image[0];
+                if (buffer instanceof ByteBuffer) {
+                    ByteBuffer byteBuffer = (ByteBuffer)buffer;
+                    byteBuffer.rewind();
+                    byteArray = new byte[byteBuffer.remaining()];
+                    byteBuffer.get(byteArray);
+                } else {
+                    System.out.println("Error: Frame is not a ByteBuffer.");
                     break;
                 }
 
                 FileImageTag tag = new FileImageTag("", 0, 0);
                 tag.setImageId(imageId);
-                byte[] byteArray = new byte[(int) (frame.total() * frame.channels())];
-                frame.data().get(byteArray);
-                ImageData image = new ImageData(byteArray, frame.cols(), frame.rows(), (int) frame.step(), EnumImagePixelFormat.IPF_RGB_888, 0, tag);
+                ImageData image = new ImageData(byteArray, frame.imageWidth, frame.imageHeight, frame.imageStride, EnumImagePixelFormat.IPF_RGB_888, 0, tag);
                 fetcher.addImageToBuffer(image);
 
-                imshow(windowName, frame);
-                int key = waitKey(1);
-                if (key == 27)
-                    break;
+                if (canvas != null) {
+                    canvas.showImage(frame);
+                }
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            if (canvas != null) {
+                if (canvas.isVisible()) {
+                    canvas.setVisible(false);
+                }
+                canvas.dispose();
+            }
+
+            if (converter != null) {
+                converter.close();
+            }
+
+            try {
+                if (useVideoFile && grabber != null) {
+                    grabber.stop();
+                    grabber.release();
+                } else if (vc != null) {
+                    vc.release();
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
             }
 
             cvRouter.stopCapturing();
-            destroyWindow(windowName);
         }
     }
 
@@ -162,24 +242,42 @@ public class VideoDecoding {
                     System.out.println("1. Decode video from camera.");
                     System.out.println("2. Decode video from file.");
                     System.out.println(">> 1 or 2:");
-                    int mode = scanner.nextInt();
-                    scanner.nextLine();
+                    String strChoice = scanner.nextLine();
+                    if (strChoice.trim().isEmpty()) {
+                        continue;
+                    }
 
-                    if (mode == 1 || mode == 2) {
-                        if (mode == 1) {
-                            useVideoFile = false;
-                        } else {
-                            useVideoFile = true;
-                            while (true) {
+                    boolean choosedMode = false;
+                    try {
+                        int mode = Integer.parseInt(strChoice.trim());
+                        if (mode == 1 || mode == 2) {
+                            useVideoFile = mode == 2;
+                            choosedMode = true;
+                        }
+                    } catch (NumberFormatException e) {
+                        videoFilePath = strChoice.replaceAll("^\"|\"$", "");
+                        useVideoFile = true;
+                    }
+
+                    if (useVideoFile) {
+                        do {
+                            if (videoFilePath.isEmpty()) {
                                 System.out.println(">> Input your video full path:");
                                 videoFilePath = scanner.nextLine();
-                                videoFilePath = videoFilePath.replaceAll("^\"|\"$", "");
-                                if (Files.exists(Paths.get(videoFilePath))) {
-                                    break;
+                                if (videoFilePath.trim().isEmpty()) {
+                                    continue;
                                 }
-                                System.out.println("Error: File not found");
+                                videoFilePath = videoFilePath.replaceAll("^\"|\"$", "");
                             }
-                        }
+                            if (Files.exists(Paths.get(videoFilePath))) {
+                                break;
+                            }
+                            System.out.println("Error: File not found");
+                            videoFilePath = "";
+                        } while (choosedMode);
+                    }
+
+                    if ((!useVideoFile && choosedMode) || !videoFilePath.isEmpty()) {
                         break;
                     }
                 } catch (Exception ignored) {

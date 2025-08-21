@@ -1,5 +1,3 @@
-package com.dynamsoft;
-
 import java.io.File;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -9,7 +7,9 @@ import java.util.Set;
 
 import com.dynamsoft.core.EnumErrorCode;
 import com.dynamsoft.core.IntermediateResultExtraInfo;
+import com.dynamsoft.core.basic_structures.CapturedResultItem;
 import com.dynamsoft.core.basic_structures.ImageData;
+import com.dynamsoft.core.basic_structures.OriginalImageResultItem;
 import com.dynamsoft.core.basic_structures.Point;
 import com.dynamsoft.core.basic_structures.Quadrilateral;
 import com.dynamsoft.cvr.CaptureVisionException;
@@ -18,6 +18,7 @@ import com.dynamsoft.cvr.CapturedResult;
 import com.dynamsoft.cvr.EnumPresetTemplate;
 import com.dynamsoft.cvr.IntermediateResultManager;
 import com.dynamsoft.cvr.IntermediateResultReceiver;
+import com.dynamsoft.cvr.SimplifiedCaptureVisionSettings;
 import com.dynamsoft.dbr.BarcodeResultItem;
 import com.dynamsoft.dbr.DecodedBarcodesResult;
 import com.dynamsoft.dbr.intermediate_results.LocalizedBarcodeElement;
@@ -155,7 +156,24 @@ public class ShowLocalizedVSDecodedBarcodes {
                 return;
             }
 
+            try {
+                SimplifiedCaptureVisionSettings settings = cvRouter.getSimplifiedSettings(EnumPresetTemplate.PT_READ_BARCODES);
+                settings.outputOriginalImage = 1;
+                cvRouter.updateSettings(EnumPresetTemplate.PT_READ_BARCODES, settings);
+            } catch (CaptureVisionException e) {
+                System.out.println("Failed to update settings: " + e.getMessage());
+                return;
+            }
+
             CapturedResult result = cvRouter.capture(image, EnumPresetTemplate.PT_READ_BARCODES);
+
+            for (CapturedResultItem capturedResultItem : result.getItems()) {
+                if (capturedResultItem instanceof OriginalImageResultItem) {
+                    OriginalImageResultItem originalImageResultItem = (OriginalImageResultItem)capturedResultItem;
+                    image = originalImageResultItem.getImageData();
+                    break;
+                }
+            }
 
             if (result.getErrorCode() == (int)EnumErrorCode.EC_UNSUPPORTED_JSON_KEY_WARNING) {
                 System.out.println("Warning: " + result.getErrorCode() + ", " + result.getErrorString());

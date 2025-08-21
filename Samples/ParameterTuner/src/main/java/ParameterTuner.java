@@ -1,5 +1,3 @@
-package com.dynamsoft;
-
 import com.dynamsoft.core.EnumErrorCode;
 import com.dynamsoft.cvr.CaptureVisionError;
 import com.dynamsoft.cvr.CaptureVisionException;
