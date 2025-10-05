@@ -22,7 +22,8 @@ public class ReadAnImage {
             // You can request and extend a trial license from https://www.dynamsoft.com/customer/license/trialLicense?product=dbr&utm_source=samples&package=java
             // The string 'DLS2eyJvcmdhbml6YXRpb25JRCI6IjIwMDAwMSJ9' here is a free public trial license. Note that network connection is required for this license to work.
             try {
-                LicenseError licenseError = LicenseManager.initLicense("DLS2eyJvcmdhbml6YXRpb25JRCI6IjIwMDAwMSJ9");
+                String license_key = System.getenv("DYNAMSOFT_LICENSE");
+                LicenseError licenseError = LicenseManager.initLicense(license_key);
                 if (licenseError.getErrorCode() != EnumErrorCode.EC_OK) {
                     errorCode = licenseError.getErrorCode();
                     errorMsg = licenseError.getErrorString();
